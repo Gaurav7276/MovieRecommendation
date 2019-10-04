@@ -24,7 +24,7 @@ movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))
 
 movielens <- left_join(ratings, movies, by = "movieId")
 
-
+# Converting Timestamp column into time difference with respect to first Rating of movie
 movielens<-movielens%>%mutate(date=as_date(timestamp))
 first_rat<-movielens%>%group_by(movieId)%>%summarize(fir_rat=min(date))
 movielens<-movielens%>%left_join(first_rat,by='movieId')%>%mutate(rat_dur=as.numeric(date-fir_rat))
