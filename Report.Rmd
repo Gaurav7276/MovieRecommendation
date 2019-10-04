@@ -1,0 +1,211 @@
+---
+title: "Movie Recommendation System"
+author: "gaurav thakur"
+date: "10/4/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+### Introduction  
+
+Movie Recommedation system aims to predict Rating of movie for given user.To make this  predictions we need to take into account different effects and pattern for specific user or movie.Its difficult to run already developed Supervised Learning models such as linear regression model, Logistic regression, knn and Random forest due to the limitation of computer processing and memory.  Thus this project involves models based on observation of different factors and how they affect ratings.  
+
+### Dataset  
+GroupLens Research has collected and made available rating data sets from MovieLens Web site.This datasets contains 10k of movies and 72K of user data alongwith 10 million ratings.This dataset also includes Movie Title,Genres and Timestamp of rating.  
+
+### Methods and Analysis  
+```{r include=FALSE}
+####Loading Of Libraries####
+library(tidyverse)
+library(data.table)
+library(caret)
+library(dslabs)
+library(matrixStats)
+library(dplyr)
+library(lubridate)
+```
+
+#### 1.Simple Average Model  
+This model assumes same overall average rating as predicted rating for all regardless of movie and users,the model will look like this  
+
+y=u+E  
+where E= Independent error  
+      u= Overall average of ratings  
+
+Following RMSE is obtained for this model:  
+
+```{r echo=FALSE}
+
+####Downloading of Dataset####
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+
+movielens<-movielens%>%mutate(date=as_date(timestamp))
+first_rat<-movielens%>%group_by(movieId)%>%summarize(fir_rat=min(date))
+movielens<-movielens%>%left_join(first_rat,by='movieId')%>%mutate(rat_dur=as.numeric(date-fir_rat))
+
+
+
+####Splitting of Dataset into Train and Test Set####
+
+set.seed(1, sample.kind="Rounding")
+# if using R 3.5 or earlier, use `set.seed(1)` instead
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+
+# Make sure userId and movieId in validation set are also in edx set
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+# Add rows removed from validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+u<-mean(edx$rating)
+naive_rsme<-RMSE(edx$rating,u)
+naive_rsme
+```
+
+This rmse is around 1 it means our prediction error will be within 1 star which is higher error.  
+
+#### 2.Movie Specific Model  
+
+we know that some movies gets rated higher than others. This trend, that different movies get different ratings is explain by data and our model will change to  
+y=u+b_movie+E  
+where b_movieismovie specific effect
+
+Variation in ratings due to movie specific effect is explain by following plot:  
+
+```{r echo=FALSE}
+###Movie Specific Effect###
+mov_avg<-edx%>%group_by(movieId)%>%summarize(b_movie=mean(rating-u))
+
+
+#Observation of Movie effect on ratings
+
+mov_avg%>%qplot(b_movie,geom = "histogram",bins=30,data=.,color="black")
+
+```
+  
+Following RMSE is obtained for this model:  
+
+```{r echo=FALSE}
+predicted_rat<-u+validation%>%left_join(mov_avg,by='movieId')%>%pull(b_movie)
+rmse_movie_effect<-RMSE(predicted_rat,validation$rating)
+rmse_movie_effect
+```
+This model gives improved RMSE over Simple average Model.  
+
+#### 3.User and Movie Specific Model  
+Following plot shows variation in average ratings for users whose ratings are above 300.  
+
+```{r echo=FALSE}
+edx%>%group_by(userId) %>%summarize(b_u = mean(rating)) %>%filter(n()>=300) %>%ggplot(aes(b_u))+geom_histogram(bins = 30, color = "black")
+
+```
+
+This shows that there is variation across users.Some users love every movie they watch and others don't like movies they watch. Thus after taking user effect in account our model will look like this  
+y=u+b_movie+b_user+E  
+....where b_user is user specific effect.  
+
+RMSE obtained from this model is  
+```{r echo=FALSE}
+use_avg<-edx%>%left_join(mov_avg,by='movieId')%>%group_by(userId)%>%summarize(b_user=mean(rating-b_movie-u))
+
+pred_rat<-validation%>%left_join(use_avg,by='userId')%>%left_join(mov_avg,by='movieId')%>%mutate(pred=u+b_user+b_movie)%>%pull(pred)
+
+rmse_mov_use<-RMSE(pred_rat,validation$rating)
+rmse_mov_use
+```
+This shows great improvement in RMSE. Lets consider other factors.  
+
+#### 4.Genres Specific Model 
+The movies are differenciated on basis of genres. Data also validate that Some Genres like action thriller have got more ratings compare to comedy. Following plot expresses this trend very clearly:   
+```{r echo=FALSE}
+edx%>%group_by(genres)%>%summarize(n = n(), avg = mean(rating), se = sd(rating)/sqrt(n())) %>%filter(n >= 10000) %>% 
+mutate(genres = reorder(genres, avg)) %>%ggplot(aes(x = genres, y = avg, ymin = avg - 2*se, ymax = avg + 2*se)) + geom_point() +
+geom_errorbar() + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+  
+So after taking genres effect into account our  model will look like  this  
+y=u+b_movie+b_user+b_genre+E  
+ where b_genre is Genres Specific effect.
+
+RMSE obtained from this model is  
+
+```{r echo=FALSE}
+pre_rat_amug<-validation%>%left_join(mov_avg,by='movieId')%>%left_join(use_avg,by='userId')%>%left_join(gen_avg,by='genres')%>%mutate(pred=u+b_user+b_movie+b_genre)%>%pull(pred)
+rmse_amug<-RMSE(pre_rat_amug,validation$rating)
+rmse_amug
+```
+This shows a more improvement in our model.  
+
+#### 5.Effect of Timestamp
+After first release of movie, it receives very good ratings and as time passes there is reduction in ratings takes place due to factors like number of days from first rating(user may get critic over time). Data validate this trend. Following plot explains effect of timestamp:  
+```{r echo=FALSE}
+edx[1:1000,]%>%ggplot(aes(rat_dur,rating))+geom_point()+geom_smooth()
+```
+The above plot is made by taking first 1000 ratings from train set.It shows that there is some relationship between rating and time difference of rating. Although this relationship is not strong it smooth curve shows some decrease in rating over time.
+Thus to account this effect i have build a linear model between residual and time difference between rating.i.e(b_time~rat_dur)  
+where  
+residual(b_time) =(y-u-b_movie-b_user-b_genre)  
+time difference(rat_dur) =difference between first rating for movie and rating for same movie   
+Coefficients of this linear model are  
+
+```{r echo=FALSE}
+t_rat<-edx%>%left_join(mov_avg,by='movieId')%>%left_join(use_avg,by='userId')%>%left_join(gen_avg,by='genres')%>%mutate(b_time=rating-u-b_user-b_movie-b_genre)
+
+#Use of linear model for relation between time difference and Rating residual
+fit_lm<-lm(b_time~rat_dur,data=t_rat)
+
+fit_lm$coefficients
+```
+
+After taking this timsestamp effect into account our model will look like this:  
+
+y=u+b_movie+b_user+b_genre+(alpha)*rat_dur+intercept+E  
+
+where alpha-slope of linear equation  
+
+RMSE obtained from this model is  
+```{r echo=FALSE}
+pre_rat_amugt<-validation%>%left_join(mov_avg,by='movieId')%>%left_join(use_avg,by='userId')%>%left_join(gen_avg,by='genres')%>%mutate(pred=u+b_user+b_movie+b_genre+fit_lm$coefficients[2]*rat_dur+fit_lm$coefficients[1])%>%pull(pred)
+rmse_amugt<-RMSE(pre_rat_amugt,validation$rating)
+rmse_amugt
+```
+This model gives even more improvement in our RMSE.  
+
+### Results  
+In above project i have used training set.i.e. edx set for training of model and then it is tested on Validation set(test set).From movielens dataset 90% data is use for training and remaining 10 % is used data for testing of models. Following table shows summarise result for all models use in this project:  
+
+```{r echo=FALSE}
+rmse_res2<-data_frame(method="Just the average",RMSE=round(naive_rsme,4))
+rmse_res2<-bind_rows(rmse_res2,data_frame(method="movie effect+average",RMSE=round(rmse_movie_effect,4)))
+rmse_res2<-bind_rows(rmse_res2,data_frame(method="movie+user+average",RMSE=round(rmse_mov_use,4)))
+rmse_res2<-bind_rows(rmse_res2,data_frame(method="movie+user+average+genres",RMSE=round(rmse_amug,4)))
+rmse_res2<-bind_rows(rmse_res2,data_frame(method="movie+user+average+genres+ratingdelay",RMSE=round(rmse_amugt,4)))
+rmse_res2
+```
+
+### Conclusion  
+
+From the model which includes effects of movies, users ,genres and timestamp (Model No.5) we can predict rating with least RMSE.In my model,relation between ratings and timestamp is approximated as linear relationship which is actually a smooth function,if it is possible to determine this function then RMSE can be further reduce.  
+With Execution of Model mentioned in this Project, we can recommend movies to given user based on Top predicted rating movies for that particular user.
